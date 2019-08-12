@@ -1,8 +1,9 @@
 # ${APP}
 
+Emoji reactions bot for Telegram.
+
 ![screenshot](docs/shot.png)
 
-Emoji reactions bot for Telegram.
 
 ## Contents
 
