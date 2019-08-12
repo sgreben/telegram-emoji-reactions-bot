@@ -50,7 +50,7 @@ func (e *emojiReaction) Button(id string, f func(*telegram.Callback)) telegram.I
 	data := string(dataBytes)
 	idBytes := md5.Sum([]byte(id + e.Emoji))
 	return telegram.InlineButton{
-		Unique: fmt.Sprintf("%x", idBytes),
+		Unique: fmt.Sprintf("%x", idBytes[:8]),
 		Data:   string(data),
 		Text:   label,
 		Action: f,
