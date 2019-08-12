@@ -1,6 +1,6 @@
 # telegram-emoji-reactions-bot
 
-Emoji reactions bot for Telegram.
+Emoji reactions bot for Telegram. Public instance: [@emoji_reactions_bot](https://t.me/emoji_reactions_bot)
 
 ![screenshot](docs/shot.png)
 
@@ -13,10 +13,9 @@ Emoji reactions bot for Telegram.
 
 ## Set-up
 
-1. Add the bot to a group
-2. Allow it to read messages
-3. Give it admin (`Delete messages`) rights
-4. See [Usage](#usage)
+1. Add the bot [@emoji_reactions_bot](https://t.me/emoji_reactions_bot) (or your own instance) to a group
+2. Give it admin (`Delete messages`) rights
+3. See [Usage](#usage)
 
 ## Get it
 
