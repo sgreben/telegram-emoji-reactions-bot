@@ -4,6 +4,9 @@ Emoji reactions bot for Telegram. Public instance: [@emoji_reactions_bot](https:
 
 ![screenshot](docs/shot.png)
 
+Includes reaction notifications:
+
+![screenshot](docs/notification.png)
 
 ## Contents
 
