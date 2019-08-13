@@ -4,6 +4,7 @@ import (
 	"crypto/md5"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -58,20 +59,39 @@ func (e *emojiReaction) Button(id string, f func(*telegram.Callback)) telegram.I
 }
 
 type emojiReactionsTo struct {
-	UserID int    `json:"U"`
-	ChatID int64  `json:"C"`
-	Text   string `json:"T"`
+	UserID    *int   `json:"U,omitempty"`
+	UserIDHex string `json:"H,omitempty"`
+	Text      string `json:"T,omitempty"`
 }
 
 func (e *emojiReactionsTo) Parse(data []byte) {
 	json.Unmarshal(data, e)
+	if e.UserID != nil {
+		return
+	}
+	userID64, _ := strconv.ParseInt(e.UserIDHex, 16, 32)
+	userID := int(userID64)
+	e.UserID = &userID
+}
+
+func (e *emojiReactionsTo) Encode() string {
+	eCopy := *e
+	eCopy.UserIDHex = fmt.Sprintf("%x", e.UserID)
+	eCopy.UserID = nil
+	dataBytes, _ := json.Marshal(eCopy)
+	textLength := len(e.Text)
+	for len(dataBytes) > 63 || textLength == 0 {
+		textLength--
+		eCopy.Text = e.Text[:textLength] + "…"
+		dataBytes, _ = json.Marshal(eCopy)
+	}
+	return string(dataBytes)
 }
 
 func (e *emojiReactionsTo) Button() telegram.InlineButton {
-	dataBytes, _ := json.Marshal(e)
 	return telegram.InlineButton{
 		Text: spaceString,
-		Data: string(dataBytes),
+		Data: e.Encode(),
 	}
 }
 
@@ -114,17 +134,25 @@ func (e *emojiReactions) Parse(buttons []telegram.InlineButton) error {
 	return nil
 }
 
-func (e *emojiReactions) Buttons(id string, f func(*telegram.Callback)) (out []telegram.InlineButton) {
-	for _, r := range e.Slice {
-		out = append(out, r.Button(id, f))
+const buttonRowLength = 5
+
+func (e *emojiReactions) Buttons(id string, f func(*telegram.Callback)) (out [][]telegram.InlineButton) {
+	var row []telegram.InlineButton
+	for i, r := range e.Slice {
+		row = append(row, r.Button(id, f))
+		if len(row) == buttonRowLength && (len(e.Slice)-i) > 1 {
+			out = append(out, row)
+			row = nil
+		}
 	}
-	out = append(out, e.To.Button())
+	row = append(row, e.To.Button())
+	out = append(out, row)
 	return
 }
 
 func (e *emojiReactions) ReplyMarkup(id string, f func(*telegram.Callback)) *telegram.ReplyMarkup {
 	return &telegram.ReplyMarkup{
-		InlineKeyboard: [][]telegram.InlineButton{e.Buttons(id, f)},
+		InlineKeyboard: e.Buttons(id, f),
 	}
 }
 

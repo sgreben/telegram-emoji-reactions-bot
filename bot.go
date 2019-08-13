@@ -67,18 +67,15 @@ func (bot *emojiReactionBot) handleCallback(m *telegram.Callback) {
 		reaction.Emoji,
 		m.Sender.Username,
 		reactions.To.Text,
-		&telegram.User{ID: reactions.To.UserID},
+		&telegram.User{ID: *reactions.To.UserID},
 	)
 }
 
 func (bot *emojiReactionBot) addReactionPost(m *telegram.Message, reactions *emojiReactions) {
 	text := m.Text
-	if len(text) > 12 {
-		text = text[:12] + "..."
-	}
+	senderID := m.Sender.ID
 	reactions.To = emojiReactionsTo{
-		UserID: m.Sender.ID,
-		ChatID: m.Chat.ID,
+		UserID: &senderID,
 		Text:   text,
 	}
 	option := reactions.ReplyMarkup(fmt.Sprint(m.ID), bot.handleCallback)
@@ -142,7 +139,7 @@ func (bot *emojiReactionBot) addReactionOrIgnore(m *telegram.Message) {
 	if _, err := bot.Edit(reactionsPost, spaceString, option); err != nil {
 		log.Printf("edit: %v", err)
 	}
-	bot.notifyOfReaction(strings.Join(textEmoji, ""), m.Sender.Username, reactions.To.Text, &telegram.User{ID: reactions.To.UserID})
+	bot.notifyOfReaction(strings.Join(textEmoji, ""), m.Sender.Username, reactions.To.Text, &telegram.User{ID: *reactions.To.UserID})
 	if err := bot.Delete(m); err != nil {
 		log.Printf("delete: %v", err)
 	}
