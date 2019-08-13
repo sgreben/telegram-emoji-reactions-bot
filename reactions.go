@@ -4,6 +4,7 @@ import (
 	"crypto/md5"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"unicode"
@@ -64,35 +65,49 @@ type emojiReactionsTo struct {
 	Text      string `json:"T,omitempty"`
 }
 
-func (e *emojiReactionsTo) Parse(data []byte) {
-	json.Unmarshal(data, e)
-	if e.UserID != nil {
-		return
+func (e *emojiReactionsTo) ParseURL(link string) (err error) {
+	linkURL, err := url.Parse(link)
+	if err != nil {
+		return err
 	}
-	userID64, _ := strconv.ParseInt(e.UserIDHex, 16, 32)
-	userID := int(userID64)
-	e.UserID = &userID
+	data := linkURL.Query().Get("data")
+	return e.Parse([]byte(data))
 }
 
+func (e *emojiReactionsTo) Parse(data []byte) (err error) {
+	err = json.Unmarshal(data, e)
+	if err != nil {
+		return
+	}
+	userID64, err := strconv.ParseInt(e.UserIDHex, 16, 32)
+	userID := int(userID64)
+	e.UserID = &userID
+	return
+}
+
+const maxMetadataLength = 4096 - 128
+
 func (e *emojiReactionsTo) Encode() string {
-	eCopy := *e
-	eCopy.UserIDHex = fmt.Sprintf("%x", e.UserID)
-	eCopy.UserID = nil
-	dataBytes, _ := json.Marshal(eCopy)
+	shortened := *e
+	if shortened.UserID == nil {
+		zero := 0
+		shortened.UserID = &zero
+	}
+	shortened.UserIDHex = fmt.Sprintf("%x", *shortened.UserID)
+	shortened.UserID = nil
+	dataBytes, _ := json.Marshal(shortened)
 	textLength := len(e.Text)
-	for len(dataBytes) > 63 || textLength == 0 {
+	for len(dataBytes) >= maxMetadataLength && textLength > 0 {
 		textLength--
-		eCopy.Text = e.Text[:textLength] + "…"
-		dataBytes, _ = json.Marshal(eCopy)
+		shortened.Text = e.Text[:textLength] + "…"
+		dataBytes, _ = json.Marshal(shortened)
 	}
 	return string(dataBytes)
 }
 
-func (e *emojiReactionsTo) Button() telegram.InlineButton {
-	return telegram.InlineButton{
-		Text: spaceString,
-		Data: e.Encode(),
-	}
+func (e *emojiReactionsTo) MessageText() string {
+	data := url.QueryEscape(e.Encode())
+	return fmt.Sprintf(`<a href="http://example.com?data=%s">`+spaceString+`</a>`, data)
 }
 
 type emojiReactions struct {
@@ -101,32 +116,33 @@ type emojiReactions struct {
 }
 
 func (e *emojiReactions) ParseMessage(m *telegram.Message) error {
-	var buttons []telegram.InlineButton
-	if len(m.ReplyMarkup.InlineKeyboard) > 0 {
-		buttons = m.ReplyMarkup.InlineKeyboard[0]
-	}
-	if err := e.Parse(buttons); err != nil {
+	if err := e.ParseButtons(m.ReplyMarkup.InlineKeyboard); err != nil {
 		return fmt.Errorf("parse message: %v", err)
+	}
+	link := m.Text
+	for _, e := range m.Entities {
+		if e.Type == telegram.EntityTextLink {
+			link = e.URL
+		}
+	}
+	if err := e.To.ParseURL(link); err != nil {
+		return fmt.Errorf("parse link %q: %v", link, err)
 	}
 	return nil
 }
 
-func (e *emojiReactions) Parse(buttons []telegram.InlineButton) error {
+func (e *emojiReactions) ParseButtons(rows [][]telegram.InlineButton) error {
 	var errors []error
 	e.Slice = nil
-	if len(buttons) == 0 {
-		return nil
-	}
-	for _, b := range buttons[:len(buttons)-1] {
-		var r emojiReaction
-		if err := r.ParseButton(&b); err != nil {
-			errors = append(errors, err)
-			continue
+	for _, buttons := range rows {
+		for _, b := range buttons {
+			var r emojiReaction
+			if err := r.ParseButton(&b); err != nil {
+				errors = append(errors, err)
+				continue
+			}
+			e.Slice = append(e.Slice, r)
 		}
-		e.Slice = append(e.Slice, r)
-	}
-	if len(buttons) > 0 {
-		e.To.Parse([]byte(buttons[len(buttons)-1].Data))
 	}
 	if len(errors) > 0 {
 		return fmt.Errorf("parse buttons: %v", errors)
@@ -134,20 +150,23 @@ func (e *emojiReactions) Parse(buttons []telegram.InlineButton) error {
 	return nil
 }
 
-const buttonRowLength = 5
-
 func (e *emojiReactions) Buttons(id string, f func(*telegram.Callback)) (out [][]telegram.InlineButton) {
 	var row []telegram.InlineButton
 	for i, r := range e.Slice {
 		row = append(row, r.Button(id, f))
-		if len(row) == buttonRowLength && (len(e.Slice)-i) > 1 {
+		if len(row) == config.ButtonRowLength && (len(e.Slice)-i) > 1 {
 			out = append(out, row)
 			row = nil
 		}
 	}
-	row = append(row, e.To.Button())
-	out = append(out, row)
+	if len(row) > 0 {
+		out = append(out, row)
+	}
 	return
+}
+
+func (e *emojiReactions) MessageText() string {
+	return e.To.MessageText()
 }
 
 func (e *emojiReactions) ReplyMarkup(id string, f func(*telegram.Callback)) *telegram.ReplyMarkup {

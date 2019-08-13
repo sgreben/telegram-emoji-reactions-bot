@@ -42,6 +42,8 @@ Or [download the binary for your platform](https://github.com/sgreben/telegram-e
 telegram-emoji-reactions-bot -token BOT_TOKEN
 
 Usage of telegram-emoji-reactions-bot:
+  -button-row-length int
+    	 (default 5)
   -timeout duration
     	 (default 2s)
   -token string

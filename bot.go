@@ -59,7 +59,7 @@ func (bot *emojiReactionBot) handleCallback(m *telegram.Callback) {
 	reactions.Add([]string{reaction.Emoji})
 
 	option := reactions.ReplyMarkup(fmt.Sprint(m.Message.ID), bot.handleCallback)
-	if _, err := bot.Edit(m.Message, m.Message.Text, option, telegram.ModeHTML); err != nil {
+	if _, err := bot.Edit(m.Message, reactions.MessageText(), option, telegram.ModeHTML); err != nil {
 		log.Printf("callback %v: edit: %v", m.ID, err)
 	}
 
@@ -79,7 +79,7 @@ func (bot *emojiReactionBot) addReactionPost(m *telegram.Message, reactions *emo
 		Text:   text,
 	}
 	option := reactions.ReplyMarkup(fmt.Sprint(m.ID), bot.handleCallback)
-	if _, err := bot.Reply(m, spaceString, telegram.Silent, option); err != nil {
+	if _, err := bot.Reply(m, reactions.MessageText(), telegram.Silent, telegram.ModeHTML, option); err != nil {
 		log.Printf("add reaction post: %v", err)
 	}
 }
@@ -136,7 +136,7 @@ func (bot *emojiReactionBot) addReactionOrIgnore(m *telegram.Message) {
 	}
 	reactions.Add(textEmoji)
 	option := reactions.ReplyMarkup(fmt.Sprint(m.ID), bot.handleCallback)
-	if _, err := bot.Edit(reactionsPost, spaceString, option); err != nil {
+	if _, err := bot.Edit(reactionsPost, reactions.MessageText(), option, telegram.ModeHTML); err != nil {
 		log.Printf("edit: %v", err)
 	}
 	bot.notifyOfReaction(strings.Join(textEmoji, ""), m.Sender.Username, reactions.To.Text, &telegram.User{ID: *reactions.To.UserID})
