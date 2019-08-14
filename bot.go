@@ -69,10 +69,9 @@ func (bot *emojiReactionBot) handleCallback(m *telegram.Callback) {
 		jsonOut.Encode(edited)
 		bot.MessageCache[edited.ID] = edited
 	}
-
 	bot.notifyOfReaction(
 		reaction.Emoji,
-		m.Sender.Username,
+		m.Sender,
 		reactions.To.Text,
 		&telegram.User{ID: *reactions.To.UserID},
 	)
@@ -116,11 +115,15 @@ func partitionEmoji(s string) ([]string, string) {
 	return add, textWithoutEmoji
 }
 
-func (bot *emojiReactionBot) notifyOfReaction(reaction, reactingUser string, reactionToText string, recipient telegram.Recipient) {
+func (bot *emojiReactionBot) notifyOfReaction(reaction string, reactingUser *telegram.User, reactionToText string, recipient telegram.Recipient) {
+	who := fmt.Sprintf("%s %s", reactingUser.FirstName, reactingUser.LastName)
+	if reactingUser.Username != "" {
+		who = fmt.Sprintf("@%s", reactingUser.Username)
+	}
 	notification := fmt.Sprintf(
-		"%s @%s reacted to <pre>%s</pre>",
+		"%s %s reacted to <pre>%s</pre>",
 		reaction,
-		reactingUser,
+		who,
 		html.EscapeString(reactionToText),
 	)
 	notificationMessage, err := bot.Send(recipient, notification, telegram.Silent, telegram.ModeHTML)
@@ -169,7 +172,7 @@ func (bot *emojiReactionBot) addReactionOrIgnore(m *telegram.Message) {
 		bot.MessageCache[edited.ID] = edited
 	}
 	if m.Sender != nil && reactions.To.UserID != nil {
-		bot.notifyOfReaction(strings.Join(textEmoji, ""), m.Sender.Username, reactions.To.Text, &telegram.User{ID: *reactions.To.UserID})
+		bot.notifyOfReaction(strings.Join(textEmoji, ""), m.Sender, reactions.To.Text, &telegram.User{ID: *reactions.To.UserID})
 	}
 }
 
@@ -190,7 +193,7 @@ func (bot *emojiReactionBot) addReactionsMessageOrAddReactionOrIgnore(m *telegra
 		bot.addReactionsMessageTo(m, reactions)
 		bot.notifyOfReaction(
 			m.Text,
-			m.Sender.Username,
+			m.Sender,
 			m.ReplyTo.Text,
 			m.ReplyTo.Sender,
 		)
