@@ -129,19 +129,25 @@ func (bot *emojiReactionBot) addReactionOrIgnore(m *telegram.Message) {
 		log.Printf("ignoring, not only emoji in %v", m.ID)
 		return // not only emoji, ignore
 	}
-	reactionsPost := m.ReplyTo
+	if err := bot.Delete(m); err != nil {
+		log.Printf("delete: %v", err)
+	}
 	reactions := &emojiReactions{}
+	reactions.Add(textEmoji)
+	reactionsPost := m.ReplyTo
+	if reactionsPost.Text != spaceString && len(reactionsPost.ReplyMarkup.InlineKeyboard) == 0 {
+		bot.addReactionPost(m.ReplyTo, reactions)
+		return
+	}
 	if err := reactions.ParseMessage(reactionsPost); err != nil {
 		log.Printf("%v: %v", m.ID, err)
 	}
-	reactions.Add(textEmoji)
 	option := reactions.ReplyMarkup(fmt.Sprint(m.ID), bot.handleCallback)
 	if _, err := bot.Edit(reactionsPost, reactions.MessageText(), option, telegram.ModeHTML); err != nil {
 		log.Printf("edit: %v", err)
 	}
-	bot.notifyOfReaction(strings.Join(textEmoji, ""), m.Sender.Username, reactions.To.Text, &telegram.User{ID: *reactions.To.UserID})
-	if err := bot.Delete(m); err != nil {
-		log.Printf("delete: %v", err)
+	if m.Sender != nil && reactions.To.UserID != nil {
+		bot.notifyOfReaction(strings.Join(textEmoji, ""), m.Sender.Username, reactions.To.Text, &telegram.User{ID: *reactions.To.UserID})
 	}
 }
 
