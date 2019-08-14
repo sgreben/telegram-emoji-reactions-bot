@@ -119,14 +119,12 @@ func (e *emojiReactions) ParseMessage(m *telegram.Message) error {
 	if err := e.ParseButtons(m.ReplyMarkup.InlineKeyboard); err != nil {
 		return fmt.Errorf("parse message: %v", err)
 	}
-	link := m.Text
-	for _, e := range m.Entities {
-		if e.Type == telegram.EntityTextLink {
-			link = e.URL
+	for _, entity := range m.Entities {
+		if entity.Type == telegram.EntityTextLink {
+			if err := e.To.ParseURL(entity.URL); err != nil {
+				return fmt.Errorf("parse link %q: %v", entity.URL, err)
+			}
 		}
-	}
-	if err := e.To.ParseURL(link); err != nil {
-		return fmt.Errorf("parse link %q: %v", link, err)
 	}
 	return nil
 }
@@ -154,7 +152,7 @@ func (e *emojiReactions) Buttons(id string, f func(*telegram.Callback)) (out [][
 	var row []telegram.InlineButton
 	for i, r := range e.Slice {
 		row = append(row, r.Button(id, f))
-		if len(row) == config.ButtonRowLength && (len(e.Slice)-i) > 1 {
+		if len(row) == config.ButtonRowLength && (len(e.Slice)-i) >= config.ButtonRowMinLength {
 			out = append(out, row)
 			row = nil
 		}

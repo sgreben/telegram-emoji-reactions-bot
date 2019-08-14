@@ -13,9 +13,10 @@ import (
 )
 
 var config struct {
-	Token           string
-	Timeout         time.Duration
-	ButtonRowLength int
+	Token              string
+	Timeout            time.Duration
+	ButtonRowLength    int
+	ButtonRowMinLength int
 }
 
 var name = "emoji-reactions-bot"
@@ -26,11 +27,15 @@ func init() {
 	log.SetOutput(os.Stderr)
 	log.SetFlags(0)
 	log.SetPrefix(fmt.Sprintf("[%s %s] ", filepath.Base(name), version))
+
 	config.Timeout = 2 * time.Second
 	config.ButtonRowLength = 5
+	config.ButtonRowMinLength = 2
+
 	flag.DurationVar(&config.Timeout, "timeout", config.Timeout, "")
 	flag.StringVar(&config.Token, "token", config.Token, "")
 	flag.IntVar(&config.ButtonRowLength, "button-row-length", config.ButtonRowLength, "")
+	flag.IntVar(&config.ButtonRowMinLength, "button-row-min-length", config.ButtonRowMinLength, "")
 	flag.Parse()
 }
 
@@ -43,7 +48,10 @@ func main() {
 		log.Fatal(err)
 		return
 	}
-	bot := &emojiReactionBot{botAPI}
+	bot := &emojiReactionBot{
+		Bot:               botAPI,
+		ReactionPostCache: make(map[int]*telegram.Message),
+	}
 	bot.init()
 	bot.Start()
 }

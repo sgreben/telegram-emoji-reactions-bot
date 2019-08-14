@@ -13,22 +13,25 @@ import (
 	telegram "github.com/sgreben/telegram-emoji-reactions-bot/internal/telebot.v2"
 )
 
-type emojiReactionBot struct{ *telegram.Bot }
+type emojiReactionBot struct {
+	*telegram.Bot
+	ReactionPostCache map[int]*telegram.Message
+}
 
 func (bot *emojiReactionBot) init() {
-	bot.Handle(telegram.OnText, printAndHandleMessage(bot.addReactionPostOrAddReactionOrIgnore))
-	bot.Handle(telegram.OnPhoto, printAndHandleMessage(bot.addReactionPostOrAddReactionOrIgnore))
-	bot.Handle(telegram.OnAudio, printAndHandleMessage(bot.addReactionPostOrAddReactionOrIgnore))
-	bot.Handle(telegram.OnDocument, printAndHandleMessage(bot.addReactionPostOrAddReactionOrIgnore))
-	bot.Handle(telegram.OnSticker, printAndHandleMessage(bot.addReactionPostOrAddReactionOrIgnore))
-	bot.Handle(telegram.OnVideo, printAndHandleMessage(bot.addReactionPostOrAddReactionOrIgnore))
-	bot.Handle(telegram.OnVoice, printAndHandleMessage(bot.addReactionPostOrAddReactionOrIgnore))
-	bot.Handle(telegram.OnVideoNote, printAndHandleMessage(bot.addReactionPostOrAddReactionOrIgnore))
-	bot.Handle(telegram.OnContact, printAndHandleMessage(bot.addReactionPostOrAddReactionOrIgnore))
-	bot.Handle(telegram.OnLocation, printAndHandleMessage(bot.addReactionPostOrAddReactionOrIgnore))
-	bot.Handle(telegram.OnVenue, printAndHandleMessage(bot.addReactionPostOrAddReactionOrIgnore))
-	bot.Handle(telegram.OnPinned, printAndHandleMessage(bot.addReactionPostOrAddReactionOrIgnore))
-	bot.Handle(telegram.OnChannelPost, printAndHandleMessage(bot.addReactionPostOrAddReactionOrIgnore))
+	bot.Handle(telegram.OnText, printAndHandleMessage(bot.addReactionsMessageOrAddReactionOrIgnore))
+	bot.Handle(telegram.OnPhoto, printAndHandleMessage(bot.addReactionsMessageOrAddReactionOrIgnore))
+	bot.Handle(telegram.OnAudio, printAndHandleMessage(bot.addReactionsMessageOrAddReactionOrIgnore))
+	bot.Handle(telegram.OnDocument, printAndHandleMessage(bot.addReactionsMessageOrAddReactionOrIgnore))
+	bot.Handle(telegram.OnSticker, printAndHandleMessage(bot.addReactionsMessageOrAddReactionOrIgnore))
+	bot.Handle(telegram.OnVideo, printAndHandleMessage(bot.addReactionsMessageOrAddReactionOrIgnore))
+	bot.Handle(telegram.OnVoice, printAndHandleMessage(bot.addReactionsMessageOrAddReactionOrIgnore))
+	bot.Handle(telegram.OnVideoNote, printAndHandleMessage(bot.addReactionsMessageOrAddReactionOrIgnore))
+	bot.Handle(telegram.OnContact, printAndHandleMessage(bot.addReactionsMessageOrAddReactionOrIgnore))
+	bot.Handle(telegram.OnLocation, printAndHandleMessage(bot.addReactionsMessageOrAddReactionOrIgnore))
+	bot.Handle(telegram.OnVenue, printAndHandleMessage(bot.addReactionsMessageOrAddReactionOrIgnore))
+	bot.Handle(telegram.OnPinned, printAndHandleMessage(bot.addReactionsMessageOrAddReactionOrIgnore))
+	bot.Handle(telegram.OnChannelPost, printAndHandleMessage(bot.addReactionsMessageOrAddReactionOrIgnore))
 	bot.Handle(telegram.OnCallback, bot.handleCallback)
 	bot.Handle(telegram.OnAddedToGroup, printAndHandleMessage(nil))
 }
@@ -57,11 +60,12 @@ func (bot *emojiReactionBot) handleCallback(m *telegram.Callback) {
 		log.Printf("callback %v: %v", m.ID, err)
 	}
 	reactions.Add([]string{reaction.Emoji})
-
-	option := reactions.ReplyMarkup(fmt.Sprint(m.Message.ID), bot.handleCallback)
-	if _, err := bot.Edit(m.Message, reactions.MessageText(), option, telegram.ModeHTML); err != nil {
+	jsonOut.Encode(reactions)
+	edited, err := bot.Edit(m.Message, reactions.MessageText(), reactions.ReplyMarkup(fmt.Sprint(m.Message.ID), bot.handleCallback), telegram.ModeHTML)
+	if err != nil {
 		log.Printf("callback %v: edit: %v", m.ID, err)
 	}
+	jsonOut.Encode(edited)
 
 	bot.notifyOfReaction(
 		reaction.Emoji,
@@ -71,17 +75,26 @@ func (bot *emojiReactionBot) handleCallback(m *telegram.Callback) {
 	)
 }
 
-func (bot *emojiReactionBot) addReactionPost(m *telegram.Message, reactions *emojiReactions) {
+func (bot *emojiReactionBot) addReactionsMessage(m *telegram.Message, reactions *emojiReactions) {
+	if reactionsMessage, ok := bot.ReactionPostCache[m.ReplyTo.ID]; ok {
+		m.ReplyTo = reactionsMessage
+		bot.addReactionOrIgnore(m)
+		return
+	}
 	text := m.Text
 	senderID := m.Sender.ID
 	reactions.To = emojiReactionsTo{
 		UserID: &senderID,
 		Text:   text,
 	}
-	option := reactions.ReplyMarkup(fmt.Sprint(m.ID), bot.handleCallback)
-	if _, err := bot.Reply(m, reactions.MessageText(), telegram.Silent, telegram.ModeHTML, option); err != nil {
+	jsonOut.Encode(reactions)
+	reactionsMessage, err := bot.Reply(m, reactions.MessageText(), reactions.ReplyMarkup(fmt.Sprint(m.ID), bot.handleCallback), telegram.Silent, telegram.ModeHTML)
+	if err != nil {
 		log.Printf("add reaction post: %v", err)
+	} else {
+		jsonOut.Encode(reactionsMessage)
 	}
+	bot.ReactionPostCache[m.ID] = reactionsMessage
 }
 
 func partitionEmoji(s string) ([]string, string) {
@@ -103,8 +116,11 @@ func (bot *emojiReactionBot) notifyOfReaction(reaction, reactingUser string, rea
 		reactingUser,
 		html.EscapeString(reactionToText),
 	)
-	if _, err := bot.Send(recipient, notification, telegram.Silent, telegram.ModeHTML); err != nil {
+	notificationMessage, err := bot.Send(recipient, notification, telegram.Silent, telegram.ModeHTML)
+	if err != nil {
 		log.Printf("notify: %v", err)
+	} else {
+		jsonOut.Encode(notificationMessage)
 	}
 }
 
@@ -129,29 +145,30 @@ func (bot *emojiReactionBot) addReactionOrIgnore(m *telegram.Message) {
 		log.Printf("ignoring, not only emoji in %v", m.ID)
 		return // not only emoji, ignore
 	}
-	if err := bot.Delete(m); err != nil {
-		log.Printf("delete: %v", err)
-	}
+	log.Printf("emoji: %q", textEmoji)
+	defer bot.Delete(m)
 	reactions := &emojiReactions{}
-	reactions.Add(textEmoji)
-	reactionsPost := m.ReplyTo
-	if reactionsPost.Text != spaceString && len(reactionsPost.ReplyMarkup.InlineKeyboard) == 0 {
-		bot.addReactionPost(m.ReplyTo, reactions)
-		return
+	reactionsMessage := m.ReplyTo
+	if reactionsMessage.ReplyTo != nil {
+		bot.ReactionPostCache[m.ReplyTo.ID] = reactionsMessage
 	}
-	if err := reactions.ParseMessage(reactionsPost); err != nil {
+	if err := reactions.ParseMessage(reactionsMessage); err != nil {
 		log.Printf("%v: %v", m.ID, err)
 	}
-	option := reactions.ReplyMarkup(fmt.Sprint(m.ID), bot.handleCallback)
-	if _, err := bot.Edit(reactionsPost, reactions.MessageText(), option, telegram.ModeHTML); err != nil {
+	reactions.Add(textEmoji)
+	jsonOut.Encode(reactions)
+	edited, err := bot.Edit(reactionsMessage, reactions.MessageText(), reactions.ReplyMarkup(fmt.Sprint(m.ID), bot.handleCallback), telegram.ModeHTML)
+	if err != nil {
 		log.Printf("edit: %v", err)
+	} else {
+		jsonOut.Encode(edited)
 	}
 	if m.Sender != nil && reactions.To.UserID != nil {
 		bot.notifyOfReaction(strings.Join(textEmoji, ""), m.Sender.Username, reactions.To.Text, &telegram.User{ID: *reactions.To.UserID})
 	}
 }
 
-func (bot *emojiReactionBot) addReactionPostOrAddReactionOrIgnore(m *telegram.Message) {
+func (bot *emojiReactionBot) addReactionsMessageOrAddReactionOrIgnore(m *telegram.Message) {
 	switch {
 	case m.Sender != nil && m.Sender.ID == bot.Me.ID:
 		log.Printf("ignoring %v", m.ID)
@@ -161,16 +178,16 @@ func (bot *emojiReactionBot) addReactionPostOrAddReactionOrIgnore(m *telegram.Me
 		bot.addReactionOrIgnore(m)
 	case m.IsReply() && isEmojiOnly(m):
 		log.Printf("adding reaction post: %v", m.ID)
+		defer bot.Delete(m)
 		textEmoji, _ := partitionEmoji(m.Text)
 		reactions := &emojiReactions{}
 		reactions.Add(textEmoji)
-		bot.addReactionPost(m.ReplyTo, reactions)
+		bot.addReactionsMessage(m.ReplyTo, reactions)
 		bot.notifyOfReaction(
 			m.Text,
 			m.Sender.Username,
 			m.ReplyTo.Text,
 			m.ReplyTo.Sender,
 		)
-		bot.Delete(m)
 	}
 }

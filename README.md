@@ -47,6 +47,8 @@ telegram-emoji-reactions-bot -token BOT_TOKEN
 Usage of telegram-emoji-reactions-bot:
   -button-row-length int
     	 (default 5)
+  -button-row-min-length int
+    	 (default 2)
   -timeout duration
     	 (default 2s)
   -token string
