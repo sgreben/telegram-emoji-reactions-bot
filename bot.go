@@ -17,8 +17,9 @@ import (
 
 type emojiReactionBot struct {
 	*telegram.Bot
-	ReactionPostCache map[int]int
-	MessageCache      map[int]*telegram.Message
+	ReactionPostCache        map[int]int
+	MessageCache             map[string]*telegram.Message
+	NotificationForwardCache map[string]*telegram.Message
 }
 
 func (bot *emojiReactionBot) init() {
@@ -37,6 +38,10 @@ func (bot *emojiReactionBot) init() {
 	bot.Handle(telegram.OnChannelPost, printAndHandleMessage(bot.addReactionsMessageOrAddReactionOrIgnore))
 	bot.Handle(telegram.OnCallback, bot.handleCallback)
 	bot.Handle(telegram.OnAddedToGroup, printAndHandleMessage(nil))
+}
+
+func globalMessageID(chatID, messageID interface{}) string {
+	return fmt.Sprintf("%v/%v", chatID, messageID)
 }
 
 func printAndHandleMessage(f func(*telegram.Message)) func(*telegram.Message) {
@@ -68,7 +73,7 @@ func (bot *emojiReactionBot) handleCallback(m *telegram.Callback) {
 		log.Printf("callback %v: edit: %v", m.ID, err)
 	} else {
 		jsonOut.Encode(edited)
-		bot.MessageCache[edited.ID] = edited
+		bot.MessageCache[globalMessageID(edited.Chat.ID, edited.ID)] = edited
 	}
 	bot.notifyOfReaction(
 		reaction.Emoji,
@@ -81,7 +86,7 @@ func (bot *emojiReactionBot) handleCallback(m *telegram.Callback) {
 
 func (bot *emojiReactionBot) addReactionsMessageTo(m *telegram.Message, reactions *emojirx.Set) {
 	if reactionsMessageID, ok := bot.ReactionPostCache[m.ReplyTo.ID]; ok {
-		if reactionsMessage, ok := bot.MessageCache[reactionsMessageID]; ok {
+		if reactionsMessage, ok := bot.MessageCache[globalMessageID(m.Chat.ID, reactionsMessageID)]; ok {
 			m.ReplyTo = reactionsMessage
 			bot.addReactionOrIgnore(m)
 			return
@@ -100,7 +105,7 @@ func (bot *emojiReactionBot) addReactionsMessageTo(m *telegram.Message, reaction
 	} else {
 		jsonOut.Encode(reactionsMessage)
 		bot.ReactionPostCache[m.ID] = reactionsMessage.ID
-		bot.MessageCache[reactionsMessage.ID] = reactionsMessage
+		bot.MessageCache[globalMessageID(reactionsMessage.Chat.ID, reactionsMessage.ID)] = reactionsMessage
 	}
 }
 
@@ -125,11 +130,23 @@ func (bot *emojiReactionBot) notifyOfReaction(reaction string, reactingUser *tel
 	if reactingUser.Username != "" {
 		who = fmt.Sprintf("@%s", reactingUser.Username)
 	}
-	forwardedMessage, err := bot.Forward(recipient, &telegram.Message{ID: reactionToMessageID, Chat: &telegram.Chat{ID: reactionToChatID}}, telegram.Silent)
-	if err != nil {
-		log.Printf("notify: %v", err)
-	} else {
+	var forwardedMessage *telegram.Message
+	if m, ok := bot.NotificationForwardCache[globalMessageID(reactionToChatID, reactionToMessageID)]; ok {
+		forwardedMessage = m
 		jsonOut.Encode(forwardedMessage)
+	} else {
+		var err error
+		forwardedMessage, err = bot.Forward(
+			recipient,
+			&telegram.Message{ID: reactionToMessageID, Chat: &telegram.Chat{ID: reactionToChatID}},
+			telegram.Silent,
+		)
+		if err != nil {
+			log.Printf("notify: %v", err)
+		} else {
+			jsonOut.Encode(forwardedMessage)
+			bot.NotificationForwardCache[globalMessageID(reactionToChatID, reactionToMessageID)] = forwardedMessage
+		}
 	}
 	notification := fmt.Sprintf("%s %s reacted", reaction, who)
 	notificationMessage, err := bot.Reply(forwardedMessage, notification, telegram.Silent)
@@ -174,7 +191,7 @@ func (bot *emojiReactionBot) addReactionOrIgnore(m *telegram.Message) {
 		log.Printf("edit: %v", err)
 	} else {
 		jsonOut.Encode(edited)
-		bot.MessageCache[edited.ID] = edited
+		bot.MessageCache[globalMessageID(edited.Chat.ID, edited.ID)] = edited
 		if edited.ReplyTo != nil {
 			bot.ReactionPostCache[edited.ReplyTo.ID] = edited.ID
 		}
