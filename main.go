@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"os"
 	"path/filepath"
@@ -17,6 +18,7 @@ var config struct {
 	Timeout            time.Duration
 	ButtonRowLength    int
 	ButtonRowMinLength int
+	Verbose            bool
 }
 
 var name = "emoji-reactions-bot"
@@ -35,8 +37,14 @@ func init() {
 	flag.DurationVar(&config.Timeout, "timeout", config.Timeout, "")
 	flag.StringVar(&config.Token, "token", config.Token, "")
 	flag.IntVar(&config.ButtonRowLength, "button-row-length", config.ButtonRowLength, "")
+	flag.BoolVar(&config.Verbose, "verbose", config.Verbose, "")
+	flag.BoolVar(&config.Verbose, "v", config.Verbose, "(alas for -verbose)")
 	flag.IntVar(&config.ButtonRowMinLength, "button-row-min-length", config.ButtonRowMinLength, "")
 	flag.Parse()
+
+	if !config.Verbose {
+		jsonOut = json.NewEncoder(ioutil.Discard)
+	}
 }
 
 func main() {

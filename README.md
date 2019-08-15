@@ -53,4 +53,7 @@ Usage of telegram-emoji-reactions-bot:
     	 (default 2s)
   -token string
     	
+  -v	(alas for -verbose)
+  -verbose
+    	
 ```

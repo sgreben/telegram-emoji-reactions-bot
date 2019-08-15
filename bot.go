@@ -2,13 +2,15 @@ package main
 
 import (
 	"fmt"
-	"html"
 	"log"
 	"strings"
+	"unicode"
 
+	"golang.org/x/text/runes"
 	"golang.org/x/text/transform"
 
 	emoji "github.com/sgreben/telegram-emoji-reactions-bot/internal/emoji"
+	emojirx "github.com/sgreben/telegram-emoji-reactions-bot/pkg/reactions"
 
 	telegram "github.com/sgreben/telegram-emoji-reactions-bot/internal/telebot.v2"
 )
@@ -50,13 +52,12 @@ func printAndHandleMessage(f func(*telegram.Message)) func(*telegram.Message) {
 var spaceString = "­­"
 
 func (bot *emojiReactionBot) handleCallback(m *telegram.Callback) {
-	log.Printf("callback %v: %q", m.ID, m.Data)
 	jsonOut.Encode(m)
-	reactions := &emojiReactions{}
+	reactions := &emojirx.Set{}
 	if err := reactions.ParseMessage(m.Message); err != nil {
 		log.Printf("callback %v: %v", m.ID, err)
 	}
-	reaction := &emojiReaction{}
+	reaction := &emojirx.Single{}
 	if err := reaction.ParseButtonData(m.Data); err != nil {
 		log.Printf("callback %v: %v", m.ID, err)
 	}
@@ -72,12 +73,13 @@ func (bot *emojiReactionBot) handleCallback(m *telegram.Callback) {
 	bot.notifyOfReaction(
 		reaction.Emoji,
 		m.Sender,
-		reactions.To.Text,
-		&telegram.User{ID: *reactions.To.UserID},
+		reactions.To.ID,
+		reactions.To.ChatID,
+		&telegram.User{ID: reactions.To.UserID},
 	)
 }
 
-func (bot *emojiReactionBot) addReactionsMessageTo(m *telegram.Message, reactions *emojiReactions) {
+func (bot *emojiReactionBot) addReactionsMessageTo(m *telegram.Message, reactions *emojirx.Set) {
 	if reactionsMessageID, ok := bot.ReactionPostCache[m.ReplyTo.ID]; ok {
 		if reactionsMessage, ok := bot.MessageCache[reactionsMessageID]; ok {
 			m.ReplyTo = reactionsMessage
@@ -86,11 +88,10 @@ func (bot *emojiReactionBot) addReactionsMessageTo(m *telegram.Message, reaction
 		}
 	}
 	m = m.ReplyTo
-	text := m.Text
-	senderID := m.Sender.ID
-	reactions.To = emojiReactionsTo{
-		UserID: &senderID,
-		Text:   text,
+	reactions.To = emojirx.To{
+		UserID: m.Sender.ID,
+		ChatID: m.Chat.ID,
+		ID:     m.ID,
 	}
 	jsonOut.Encode(reactions)
 	reactionsMessage, err := bot.Reply(m, reactions.MessageText(), reactions.ReplyMarkup(fmt.Sprint(m.ID), bot.handleCallback), telegram.Silent, telegram.ModeHTML)
@@ -104,6 +105,10 @@ func (bot *emojiReactionBot) addReactionsMessageTo(m *telegram.Message, reaction
 }
 
 func partitionEmoji(s string) ([]string, string) {
+	noSpaceOrPunct := transform.Chain(
+		runes.Remove(runes.In(unicode.Space)),
+		runes.Remove(runes.In(unicode.Punct)),
+	)
 	textEmoji := emoji.FindAll(s)
 	textWithoutEmoji, _, _ := transform.String(noSpaceOrPunct, emoji.RemoveAll(s))
 	var add []string
@@ -115,18 +120,19 @@ func partitionEmoji(s string) ([]string, string) {
 	return add, textWithoutEmoji
 }
 
-func (bot *emojiReactionBot) notifyOfReaction(reaction string, reactingUser *telegram.User, reactionToText string, recipient telegram.Recipient) {
+func (bot *emojiReactionBot) notifyOfReaction(reaction string, reactingUser *telegram.User, reactionToMessageID int, reactionToChatID int64, recipient telegram.Recipient) {
 	who := fmt.Sprintf("%s %s", reactingUser.FirstName, reactingUser.LastName)
 	if reactingUser.Username != "" {
 		who = fmt.Sprintf("@%s", reactingUser.Username)
 	}
-	notification := fmt.Sprintf(
-		"%s %s reacted to <pre>%s</pre>",
-		reaction,
-		who,
-		html.EscapeString(reactionToText),
-	)
-	notificationMessage, err := bot.Send(recipient, notification, telegram.Silent, telegram.ModeHTML)
+	forwardedMessage, err := bot.Forward(recipient, &telegram.Message{ID: reactionToMessageID, Chat: &telegram.Chat{ID: reactionToChatID}}, telegram.Silent)
+	if err != nil {
+		log.Printf("notify: %v", err)
+	} else {
+		jsonOut.Encode(forwardedMessage)
+	}
+	notification := fmt.Sprintf("%s %s reacted", reaction, who)
+	notificationMessage, err := bot.Reply(forwardedMessage, notification, telegram.Silent)
 	if err != nil {
 		log.Printf("notify: %v", err)
 	} else {
@@ -155,9 +161,8 @@ func (bot *emojiReactionBot) addReactionOrIgnore(m *telegram.Message) {
 		log.Printf("ignoring, not only emoji in %v", m.ID)
 		return // not only emoji, ignore
 	}
-	log.Printf("emoji: %q", textEmoji)
 	defer bot.Delete(m)
-	reactions := &emojiReactions{}
+	reactions := &emojirx.Set{}
 	reactionsMessage := m.ReplyTo
 	if err := reactions.ParseMessage(reactionsMessage); err != nil {
 		log.Printf("%v: %v", m.ID, err)
@@ -170,31 +175,30 @@ func (bot *emojiReactionBot) addReactionOrIgnore(m *telegram.Message) {
 	} else {
 		jsonOut.Encode(edited)
 		bot.MessageCache[edited.ID] = edited
+		if edited.ReplyTo != nil {
+			bot.ReactionPostCache[edited.ReplyTo.ID] = edited.ID
+		}
 	}
-	if m.Sender != nil && reactions.To.UserID != nil {
-		bot.notifyOfReaction(strings.Join(textEmoji, ""), m.Sender, reactions.To.Text, &telegram.User{ID: *reactions.To.UserID})
-	}
+	bot.notifyOfReaction(strings.Join(textEmoji, ""), m.Sender, reactions.To.ID, reactions.To.ChatID, &reactions.To)
 }
 
 func (bot *emojiReactionBot) addReactionsMessageOrAddReactionOrIgnore(m *telegram.Message) {
 	switch {
 	case m.Sender != nil && m.Sender.ID == bot.Me.ID:
-		log.Printf("ignoring %v", m.ID)
 		// ignore
 	case m.IsReply() && m.ReplyTo.Sender.ID == bot.Me.ID:
-		log.Printf("adding reaction or ignoring %v", m.ID)
 		bot.addReactionOrIgnore(m)
 	case m.IsReply() && isEmojiOnly(m):
-		log.Printf("adding reaction post: %v", m.ID)
 		defer bot.Delete(m)
 		textEmoji, _ := partitionEmoji(m.Text)
-		reactions := &emojiReactions{}
+		reactions := &emojirx.Set{}
 		reactions.Add(textEmoji)
 		bot.addReactionsMessageTo(m, reactions)
 		bot.notifyOfReaction(
 			m.Text,
 			m.Sender,
-			m.ReplyTo.Text,
+			m.ReplyTo.ID,
+			m.ReplyTo.Chat.ID,
 			m.ReplyTo.Sender,
 		)
 	}
