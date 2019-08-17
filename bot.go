@@ -219,13 +219,13 @@ func newReactionSet() *emojirx.Set {
 
 func (bot *emojiReactionBot) addReactionOrIgnore(m *telegram.Message) {
 	textEmoji, textWithoutEmoji := partitionEmoji(m.Text)
-	if len(textEmoji) == 0 {
-		log.Printf("ignoring, no emoji in %v", m.ID)
-		return // no emoji, ignore
-	}
-	if textWithoutEmoji != "" {
-		log.Printf("ignoring, not only emoji in %v", m.ID)
-		return // not only emoji, ignore
+	switch {
+	case len(textWithoutEmoji) == 0 && len(textEmoji) > 0:
+	// ok
+	case len(textWithoutEmoji) == 1 && len(textEmoji) == 0:
+		textEmoji = []string{m.Text} // ok
+	default:
+		return // ignore
 	}
 	defer bot.Delete(m)
 	reactions := newReactionSet()
@@ -256,6 +256,20 @@ func (bot *emojiReactionBot) addReactionsMessageOrAddReactionOrIgnore(m *telegra
 		// ignore
 	case m.IsReply() && m.ReplyTo.Sender.ID == bot.Me.ID:
 		bot.addReactionOrIgnore(m)
+	case m.IsReply() && len(m.Text) == 1:
+		defer bot.Delete(m)
+		reactions := newReactionSet()
+		added, _ := reactions.AddOrRemove(m.Sender.ID, []string{m.Text})
+		bot.addReactionsMessageTo(m, reactions)
+		if added > 0 {
+			bot.notifyOfReaction(
+				m.Text,
+				m.Sender,
+				m.ReplyTo.ID,
+				m.ReplyTo.Chat.ID,
+				m.ReplyTo.Sender,
+			)
+		}
 	case m.IsReply() && isEmojiOnly(m):
 		defer bot.Delete(m)
 		textEmoji, _ := partitionEmoji(m.Text)
