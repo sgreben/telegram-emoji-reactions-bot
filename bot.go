@@ -16,12 +16,18 @@ import (
 	telegram "github.com/sgreben/telegram-emoji-reactions-bot/internal/telebot.v2"
 )
 
+var spaceString = string([]byte{0xc2, 0xad, 0xc2, 0xad})
+
+type emojiReactionBotCaches struct {
+	ReactionMessageIDFor map[string]int
+	MessageFor           map[string]*telegram.Message
+	ForwardedFor         map[string]*telegram.Message
+	Mu                   sync.RWMutex
+}
+
 type emojiReactionBot struct {
 	*telegram.Bot
-	ReactionPostCache        map[int]int
-	MessageCache             map[string]*telegram.Message
-	NotificationForwardCache map[string]*telegram.Message
-	Mu                       sync.RWMutex
+	*emojiReactionBotCaches
 }
 
 func (bot *emojiReactionBot) init() {
@@ -42,25 +48,67 @@ func (bot *emojiReactionBot) init() {
 	bot.Handle(telegram.OnAddedToGroup, printAndHandleMessage(nil))
 }
 
-func globalMessageID(chatID, messageID interface{}) string {
-	return fmt.Sprintf("%v/%v", chatID, messageID)
+func (bot *emojiReactionBot) MessageForRead(chatID int64, messageID int) (*telegram.Message, bool) {
+	k := globalMessageID(chatID, messageID)
+	bot.Mu.RLock()
+	defer bot.Mu.RUnlock()
+	m, ok := bot.MessageFor[k]
+	return m, ok
+}
+
+func (bot *emojiReactionBot) MessageForWrite(m *telegram.Message) {
+	k := globalMessageID(m.Chat.ID, m.ID)
+	bot.Mu.Lock()
+	defer bot.Mu.Unlock()
+	bot.MessageFor[k] = m
+}
+
+func (bot *emojiReactionBot) NotificationForwardCacheRead(chatID int64, messageID int) (*telegram.Message, bool) {
+	k := globalMessageID(chatID, messageID)
+	bot.Mu.RLock()
+	defer bot.Mu.RUnlock()
+	m, ok := bot.ForwardedFor[k]
+	return m, ok
+}
+
+func (bot *emojiReactionBot) NotificationForwardCacheWrite(chatID int64, messageID int, forwardedMessage *telegram.Message) {
+	k := globalMessageID(chatID, messageID)
+	bot.Mu.Lock()
+	defer bot.Mu.Unlock()
+	bot.ForwardedFor[k] = forwardedMessage
+}
+
+func (bot *emojiReactionBot) ReactionMessageIDForRead(chatID int64, messageID int) (int, bool) {
+	k := globalMessageID(chatID, messageID)
+	bot.Mu.RLock()
+	defer bot.Mu.RUnlock()
+	m, ok := bot.ReactionMessageIDFor[k]
+	return m, ok
+}
+
+func (bot *emojiReactionBot) ReactionMessageIDForWrite(chatID int64, messageID int, reactionMessageID int) {
+	k := globalMessageID(chatID, messageID)
+	bot.Mu.Lock()
+	defer bot.Mu.Unlock()
+	bot.ReactionMessageIDFor[k] = reactionMessageID
+}
+
+func globalMessageID(chatID int64, messageID int) string {
+	return fmt.Sprintf("%x:%x", chatID, messageID)
 }
 
 func printAndHandleMessage(f func(*telegram.Message)) func(*telegram.Message) {
 	return func(m *telegram.Message) {
 		jsonOut.Encode(m)
-		if f == nil {
-			return
+		if f != nil {
+			f(m)
 		}
-		f(m)
 	}
 }
 
-var spaceString = "­­"
-
 func (bot *emojiReactionBot) handleCallback(m *telegram.Callback) {
 	jsonOut.Encode(m)
-	reactions := &emojirx.Set{}
+	reactions := newReactionSet()
 	if err := reactions.ParseMessage(m.Message); err != nil {
 		log.Printf("callback %v: %v", m.ID, err)
 	}
@@ -68,39 +116,30 @@ func (bot *emojiReactionBot) handleCallback(m *telegram.Callback) {
 	if err := reaction.ParseButtonData(m.Data); err != nil {
 		log.Printf("callback %v: %v", m.ID, err)
 	}
-	reactions.Add([]string{reaction.Emoji})
+	added, _ := reactions.AddOrRemove(m.Sender.ID, []string{reaction.Emoji})
 	jsonOut.Encode(reactions)
 	edited, err := bot.Edit(m.Message, reactions.MessageText(), reactions.ReplyMarkup(fmt.Sprint(m.Message.ID), bot.handleCallback), telegram.ModeHTML)
 	if err != nil {
 		log.Printf("callback %v: edit: %v", m.ID, err)
 	} else {
 		jsonOut.Encode(edited)
-		bot.Mu.Lock()
-		bot.MessageCache[globalMessageID(edited.Chat.ID, edited.ID)] = edited
-		bot.Mu.Unlock()
+		bot.MessageForWrite(edited)
 	}
-	bot.notifyOfReaction(
-		reaction.Emoji,
-		m.Sender,
-		reactions.To.ID,
-		reactions.To.ChatID,
-		&telegram.User{ID: reactions.To.UserID},
-	)
+	if added > 0 {
+		bot.notifyOfReaction(reaction.Emoji, m.Sender, reactions.To.ID, reactions.To.ChatID, &telegram.User{ID: reactions.To.UserID})
+	}
 }
 
 func (bot *emojiReactionBot) addReactionsMessageTo(m *telegram.Message, reactions *emojirx.Set) {
-	bot.Mu.RLock()
-	if reactionsMessageID, ok := bot.ReactionPostCache[m.ReplyTo.ID]; ok {
-		if reactionsMessage, ok := bot.MessageCache[globalMessageID(m.Chat.ID, reactionsMessageID)]; ok {
+	if reactionsMessageID, ok := bot.ReactionMessageIDForRead(m.ReplyTo.Chat.ID, m.ReplyTo.ID); ok {
+		if reactionsMessage, ok := bot.MessageForRead(m.Chat.ID, reactionsMessageID); ok {
 			m.ReplyTo = reactionsMessage
-			bot.Mu.RUnlock()
 			bot.addReactionOrIgnore(m)
 			return
 		}
 	}
-	bot.Mu.RUnlock()
 	m = m.ReplyTo
-	reactions.To = emojirx.To{
+	reactions.To = &emojirx.To{
 		UserID: m.Sender.ID,
 		ChatID: m.Chat.ID,
 		ID:     m.ID,
@@ -111,10 +150,8 @@ func (bot *emojiReactionBot) addReactionsMessageTo(m *telegram.Message, reaction
 		log.Printf("add reaction post: %v", err)
 	} else {
 		jsonOut.Encode(reactionsMessage)
-		bot.Mu.Lock()
-		bot.ReactionPostCache[m.ID] = reactionsMessage.ID
-		bot.MessageCache[globalMessageID(reactionsMessage.Chat.ID, reactionsMessage.ID)] = reactionsMessage
-		bot.Mu.Unlock()
+		bot.ReactionMessageIDForWrite(m.Chat.ID, m.ID, reactionsMessage.ID)
+		bot.MessageForWrite(reactionsMessage)
 	}
 }
 
@@ -140,26 +177,17 @@ func (bot *emojiReactionBot) notifyOfReaction(reaction string, reactingUser *tel
 		who = fmt.Sprintf("@%s", reactingUser.Username)
 	}
 	var forwardedMessage *telegram.Message
-	bot.Mu.RLock()
-	if m, ok := bot.NotificationForwardCache[globalMessageID(reactionToChatID, reactionToMessageID)]; ok {
-		bot.Mu.RUnlock()
+	if m, ok := bot.NotificationForwardCacheRead(reactionToChatID, reactionToMessageID); ok {
 		forwardedMessage = m
 		jsonOut.Encode(forwardedMessage)
 	} else {
-		bot.Mu.RUnlock()
 		var err error
-		forwardedMessage, err = bot.Forward(
-			recipient,
-			&telegram.Message{ID: reactionToMessageID, Chat: &telegram.Chat{ID: reactionToChatID}},
-			telegram.Silent,
-		)
+		forwardedMessage, err = bot.Forward(recipient, &telegram.Message{ID: reactionToMessageID, Chat: &telegram.Chat{ID: reactionToChatID}}, telegram.Silent)
 		if err != nil {
 			log.Printf("notify: %v", err)
 		} else {
 			jsonOut.Encode(forwardedMessage)
-			bot.Mu.Lock()
-			bot.NotificationForwardCache[globalMessageID(reactionToChatID, reactionToMessageID)] = forwardedMessage
-			bot.Mu.Unlock()
+			bot.NotificationForwardCacheWrite(reactionToChatID, reactionToMessageID, forwardedMessage)
 		}
 	}
 	notification := fmt.Sprintf("%s %s reacted", reaction, who)
@@ -182,6 +210,13 @@ func isEmojiOnly(m *telegram.Message) bool {
 	return true
 }
 
+func newReactionSet() *emojirx.Set {
+	out := &emojirx.Set{Previous: &emojirx.Previous{}}
+	out.Config.ButtonRowLength = config.ButtonRowLength
+	out.Config.ButtonRowMinLength = config.ButtonRowMinLength
+	return out
+}
+
 func (bot *emojiReactionBot) addReactionOrIgnore(m *telegram.Message) {
 	textEmoji, textWithoutEmoji := partitionEmoji(m.Text)
 	if len(textEmoji) == 0 {
@@ -193,28 +228,26 @@ func (bot *emojiReactionBot) addReactionOrIgnore(m *telegram.Message) {
 		return // not only emoji, ignore
 	}
 	defer bot.Delete(m)
-	reactions := &emojirx.Set{}
+	reactions := newReactionSet()
 	reactionsMessage := m.ReplyTo
 	if err := reactions.ParseMessage(reactionsMessage); err != nil {
 		log.Printf("%v: %v", m.ID, err)
 	}
-	reactions.Add(textEmoji)
+	added, _ := reactions.AddOrRemove(m.Sender.ID, textEmoji)
 	jsonOut.Encode(reactions)
 	edited, err := bot.Edit(reactionsMessage, reactions.MessageText(), reactions.ReplyMarkup(fmt.Sprint(m.ID), bot.handleCallback), telegram.ModeHTML)
 	if err != nil {
 		log.Printf("edit: %v", err)
 	} else {
 		jsonOut.Encode(edited)
-		bot.Mu.Lock()
-		bot.MessageCache[globalMessageID(edited.Chat.ID, edited.ID)] = edited
-		bot.Mu.Unlock()
+		bot.MessageForWrite(edited)
 		if edited.ReplyTo != nil {
-			bot.Mu.Lock()
-			bot.ReactionPostCache[edited.ReplyTo.ID] = edited.ID
-			bot.Mu.Unlock()
+			bot.ReactionMessageIDForWrite(edited.Chat.ID, edited.ReplyTo.ID, edited.ID)
 		}
 	}
-	bot.notifyOfReaction(strings.Join(textEmoji, ""), m.Sender, reactions.To.ID, reactions.To.ChatID, &reactions.To)
+	if added > 0 {
+		bot.notifyOfReaction(strings.Join(textEmoji, ""), m.Sender, reactions.To.ID, reactions.To.ChatID, reactions.To)
+	}
 }
 
 func (bot *emojiReactionBot) addReactionsMessageOrAddReactionOrIgnore(m *telegram.Message) {
@@ -226,15 +259,17 @@ func (bot *emojiReactionBot) addReactionsMessageOrAddReactionOrIgnore(m *telegra
 	case m.IsReply() && isEmojiOnly(m):
 		defer bot.Delete(m)
 		textEmoji, _ := partitionEmoji(m.Text)
-		reactions := &emojirx.Set{}
-		reactions.Add(textEmoji)
+		reactions := newReactionSet()
+		added, _ := reactions.AddOrRemove(m.Sender.ID, textEmoji)
 		bot.addReactionsMessageTo(m, reactions)
-		bot.notifyOfReaction(
-			m.Text,
-			m.Sender,
-			m.ReplyTo.ID,
-			m.ReplyTo.Chat.ID,
-			m.ReplyTo.Sender,
-		)
+		if added > 0 {
+			bot.notifyOfReaction(
+				m.Text,
+				m.Sender,
+				m.ReplyTo.ID,
+				m.ReplyTo.Chat.ID,
+				m.ReplyTo.Sender,
+			)
+		}
 	}
 }

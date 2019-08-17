@@ -57,10 +57,12 @@ func main() {
 		return
 	}
 	bot := &emojiReactionBot{
-		Bot:                      botAPI,
-		ReactionPostCache:        make(map[int]int),
-		MessageCache:             make(map[string]*telegram.Message),
-		NotificationForwardCache: make(map[string]*telegram.Message),
+		Bot: botAPI,
+		emojiReactionBotCaches: &emojiReactionBotCaches{
+			ReactionMessageIDFor: make(map[string]int),
+			MessageFor:           make(map[string]*telegram.Message),
+			ForwardedFor:         make(map[string]*telegram.Message),
+		},
 	}
 	bot.init()
 	bot.Start()

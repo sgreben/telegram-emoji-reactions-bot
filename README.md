@@ -37,7 +37,7 @@ Or [download the binary for your platform](https://github.com/sgreben/telegram-e
 1. Reply to a message with only emoji
 2. Add further emoji by either...
    - ...using the buttons to `+1` existing emoji, or
-   - ...replying to the button post with new emoji
+   - ...replying with new emoji
 
 ### CLI
 
