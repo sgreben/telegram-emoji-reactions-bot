@@ -34,7 +34,7 @@ Or [download the binary for your platform](https://github.com/sgreben/${APP}/rel
 
 ### Telegram
 
-1. Reply to a message with only emoji
+1. Reply to a message with only emoji (or a single letter)
 2. Add further emoji by either...
    - ...using the buttons to `+1` existing emoji, or
    - ...replying with new emoji
