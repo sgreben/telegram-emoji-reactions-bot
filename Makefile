@@ -1,4 +1,4 @@
-VERSION = 0.4.1
+VERSION = 0.4.2
 
 APP      := telegram-emoji-reactions-bot
 PACKAGES := $(shell go list -f {{.Dir}} ./...)
